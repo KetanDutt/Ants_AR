@@ -68,6 +68,8 @@ namespace FrostweepGames.Plugins.GoogleCloud.TextToSpeech
 
             _Instance = this;
 
+    Debug.Log("GCTextToSpeech: " + apiKey);
+    
             ServiceLocator.Register<ITextToSpeechManager>(new TextToSpeechManager());
             ServiceLocator.Register<IMediaManager>(new MediaManager());
             ServiceLocator.InitServices();
