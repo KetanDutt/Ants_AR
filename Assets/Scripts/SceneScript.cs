@@ -1,13 +1,22 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
-using TMPro;
 using DG.Tweening;
+using TMPro;
+using UnityEngine;
+using UnityEngine.EventSystems;
 
+/// <summary>
+/// Controls one placed quiz world: its ant, three answer platforms, touch input,
+/// feedback animation, and pinch-to-resize gesture.
+/// </summary>
 public class SceneScript : MonoBehaviour
 {
-    [SerializeField] private GameObject spawnPoint;
+    private const float MinimumWorldScale = 0.05f;
+    private const float MaximumWorldScale = 0.5f;
+    private const float AnswerJumpDuration = 1.25f;
 
+    [SerializeField] private GameObject spawnPoint;
     [SerializeField] private GameObject jumpPoint1;
     [SerializeField] private GameObject jumpPoint2;
     [SerializeField] private GameObject jumpPoint3;
@@ -21,129 +30,304 @@ public class SceneScript : MonoBehaviour
     [SerializeField] private Material normalMat;
     [SerializeField] private Material selectedMat;
 
+    // Retained so existing scene/prefab data remains compatible. The optional
+    // billboard is not required for the core quiz interaction.
     [SerializeField] private GameObject billboardPrefab;
 
-    public bool QuestionState = true;
+    [HideInInspector] public bool QuestionState;
     public GameObject Ant;
     public GameObject billboard;
-    private string Answer = "";
+
     private Camera arCamera;
-    private Animator AntAnaimator;
+    private Animator antAnimator;
+    private string correctAnswer = string.Empty;
+    private bool hasValidQuestion;
+    private float initialPinchDistance;
+    private Vector3 initialWorldScale;
+    private Tween activeTween;
 
-    public void setQuestion(Question question)
+    private readonly Transform[] answerPlatformRoots = new Transform[3];
+    private readonly Transform[] answerJumpPoints = new Transform[3];
+    private readonly TextMeshPro[] answerLabels = new TextMeshPro[3];
+    private readonly Renderer[] answerRenderers = new Renderer[3];
+    private readonly List<RaycastResult> uiRaycastResults = new List<RaycastResult>();
+
+    private void Awake()
     {
-        Answer = question.question;
-        text1.text = question.Answers[0];
-        text2.text = question.Answers[1];
-        text3.text = question.Answers[2];
-    }
+        if (GameManager.instance != null)
+            arCamera = GameManager.instance.arCamera;
 
-    public void SpawnAnt(GameObject ant)
-    {
-        Transform parent = Ant.transform.parent;
-        Ant.transform.SetParent(null);
-        Vector3 scale = Ant.transform.localScale;
-        Ant = Instantiate(ant, Ant.transform.position, Ant.transform.rotation);
-        Ant.transform.localScale = scale;
-        Ant.transform.SetParent(parent);
-        AntAnaimator = Ant.transform.GetChild(0).gameObject.GetComponent<Animator>();
+        if (arCamera == null)
+            arCamera = Camera.main;
 
-        // billboard = Instantiate(billboardPrefab, new Vector3(Ant.transform.position.x, Ant.transform.position.y + .2f, Ant.transform.position.z), Ant.transform.rotation);
-        // billboard.transform.localScale = scale * .5f;
-        // billboard.transform.SetParent(parent);
-    }
+        answerJumpPoints[0] = jumpPoint1 != null ? jumpPoint1.transform : null;
+        answerJumpPoints[1] = jumpPoint2 != null ? jumpPoint2.transform : null;
+        answerJumpPoints[2] = jumpPoint3 != null ? jumpPoint3.transform : null;
 
-    private void Start()
-    {
-        arCamera = GameManager.instance.arCamera;
-        StartCoroutine(MyScript.waiter(1f, () =>
+        answerLabels[0] = text1;
+        answerLabels[1] = text2;
+        answerLabels[2] = text3;
+
+        for (int index = 0; index < answerJumpPoints.Length; index++)
         {
-            QuestionState = true;
-        }));
+            Transform jumpPoint = answerJumpPoints[index];
+            if (jumpPoint == null)
+                continue;
+
+            answerPlatformRoots[index] = jumpPoint.parent;
+            if (answerPlatformRoots[index] != null)
+                answerRenderers[index] = answerPlatformRoots[index].GetComponentInChildren<Renderer>(true);
+
+            if (answerLabels[index] != null)
+                answerLabels[index].richText = false;
+        }
     }
-    float initialDistance;
-    Vector3 initialScale;
+
     private void Update()
     {
-        Vector3 position = Ant.transform.position;
-        Vector3 cameraPosition = arCamera.transform.position;
-        Vector3 direction = cameraPosition - position;
-        Vector3 targetRotationEuler = Quaternion.LookRotation(-direction).eulerAngles;
-        Vector3 scaledEuler = Vector3.Scale(targetRotationEuler, Ant.transform.up.normalized);
-        Quaternion targetRotation = Quaternion.Euler(scaledEuler);
-        Ant.transform.rotation = targetRotation;
+        if (Ant != null && arCamera != null)
+            FaceCamera();
 
+        HandlePinchGesture();
 
-        if (Input.touchCount == 2)
+        if (!QuestionState || !hasValidQuestion || Ant == null || antAnimator == null)
+            return;
+
+        Vector2 pointerPosition;
+        if (!TryGetPointerDown(out pointerPosition) || IsPointerOverUI(pointerPosition))
+            return;
+
+        Ray ray = arCamera.ScreenPointToRay(pointerPosition);
+        RaycastHit hit;
+        if (!Physics.Raycast(ray, out hit))
+            return;
+
+        int answerIndex = FindAnswerIndex(hit.transform);
+        if (answerIndex >= 0)
+            SelectAnswer(answerIndex);
+    }
+
+    private void FaceCamera()
+    {
+        // The mesh is authored facing backwards relative to the root transform,
+        // so the root faces away from the camera to make the ant look toward it.
+        Vector3 direction = Vector3.ProjectOnPlane(Ant.transform.position - arCamera.transform.position, transform.up);
+        if (direction.sqrMagnitude > 0.0001f)
+            Ant.transform.rotation = Quaternion.LookRotation(direction.normalized, transform.up);
+    }
+
+    private void HandlePinchGesture()
+    {
+        if (Input.touchCount != 2)
         {
-            var touchZero = Input.GetTouch(0);
-            var touchOne = Input.GetTouch(1);
-
-            // if any one of touchzero or touchOne is cancelled or maybe ended then do nothing
-            if (touchZero.phase == TouchPhase.Ended || touchZero.phase == TouchPhase.Canceled ||
-            touchOne.phase == TouchPhase.Ended || touchOne.phase == TouchPhase.Canceled)
-            {
-                return; // basically do nothing
-            }
-
-            if (touchZero.phase == TouchPhase.Began || touchOne.phase == TouchPhase.Began)
-            {
-                initialDistance = Vector2.Distance(touchZero.position, touchOne.position);
-                initialScale = gameObject.transform.localScale;
-            }
-            else // if touch is moved
-            {
-                var currentDistance = Vector2.Distance(touchZero.position, touchOne.position);
-                //if accidentally touched or pinch movement is very very small
-                if (Mathf.Approximately(initialDistance, 0))
-                {
-                    return; // do nothing if it can be ignored where inital distance is very close to zero
-                }
-                var factor = currentDistance / initialDistance;
-                transform.localScale = initialScale * factor;
-            }
+            initialPinchDistance = 0f;
+            return;
         }
 
-
-        if (!QuestionState)
+        UnityEngine.Touch touchZero = Input.GetTouch(0);
+        UnityEngine.Touch touchOne = Input.GetTouch(1);
+        if (touchZero.phase == TouchPhase.Ended || touchZero.phase == TouchPhase.Canceled ||
+            touchOne.phase == TouchPhase.Ended || touchOne.phase == TouchPhase.Canceled)
+        {
+            initialPinchDistance = 0f;
             return;
+        }
+
+        float currentDistance = Vector2.Distance(touchZero.position, touchOne.position);
+        if (touchZero.phase == TouchPhase.Began || touchOne.phase == TouchPhase.Began || initialPinchDistance <= 0f)
+        {
+            initialPinchDistance = currentDistance;
+            initialWorldScale = transform.localScale;
+            return;
+        }
+
+        if (currentDistance <= 0f || initialPinchDistance <= 0f)
+            return;
+
+        float targetScale = initialWorldScale.x * (currentDistance / initialPinchDistance);
+        targetScale = Mathf.Clamp(targetScale, MinimumWorldScale, MaximumWorldScale);
+        transform.localScale = Vector3.one * targetScale;
+    }
+
+    private static bool TryGetPointerDown(out Vector2 screenPosition)
+    {
+        if (Input.touchCount > 0)
+        {
+            UnityEngine.Touch touch = Input.GetTouch(0);
+            screenPosition = touch.position;
+            return touch.phase == TouchPhase.Began;
+        }
 
         if (Input.GetMouseButtonDown(0))
         {
-            RaycastHit hit;
-            Ray ray = arCamera.ScreenPointToRay(Input.mousePosition);
-            if (Physics.Raycast(ray, out hit))
-            {
-                string text = hit.transform.parent.GetChild(1).gameObject.GetComponent<TextMeshPro>().text;
-                QuestionState = false;
-                AntAnaimator.CrossFade("JumpingLoop", .1f);
-                hit.transform.parent.GetChild(0).gameObject.GetComponent<MeshRenderer>().material = selectedMat;
-                Ant.transform.DOJump(hit.transform.parent.GetChild(2).position, transform.localScale.x * 6, 1, 2).OnComplete(() =>
-                {
-                    AntAnaimator.CrossFade("Happy Idle", .1f);
-                    if (Answer.Equals(text))
-                    {
-                        TextToSpeech.convert(GameManager.instance.configData.CorrectText);
-                        hit.transform.parent.GetChild(0).gameObject.GetComponent<MeshRenderer>().material = greenMat;
-                    }
-                    else
-                    {
-                        TextToSpeech.convert(GameManager.instance.configData.IncorrectText);
-                        hit.transform.parent.GetChild(0).gameObject.GetComponent<MeshRenderer>().material = redMat;
-                    }
-                    StartCoroutine(MyScript.waiter(.5f, () =>
-                    {
-                        AntAnaimator.CrossFade("JumpingLoop", .1f);
-                        Ant.transform.DOJump(spawnPoint.transform.position, transform.localScale.x * 6, 1, 2).OnComplete(() =>
-                        {
-                            AntAnaimator.CrossFade("Happy Idle", .1f);
-                            QuestionState = true;
-                            hit.transform.parent.GetChild(0).gameObject.GetComponent<MeshRenderer>().material = normalMat;
-                            GameManager.instance.loadNextQuestion();
-                        });
-                    }));
-                });
-            }
+            screenPosition = Input.mousePosition;
+            return true;
         }
+
+        screenPosition = Vector2.zero;
+        return false;
+    }
+
+    private bool IsPointerOverUI(Vector2 screenPosition)
+    {
+        EventSystem eventSystem = EventSystem.current;
+        if (eventSystem == null)
+            return false;
+
+        PointerEventData pointerData = new PointerEventData(eventSystem);
+        pointerData.position = screenPosition;
+        uiRaycastResults.Clear();
+        eventSystem.RaycastAll(pointerData, uiRaycastResults);
+        return uiRaycastResults.Count > 0;
+    }
+
+    private int FindAnswerIndex(Transform hitTransform)
+    {
+        if (hitTransform == null)
+            return -1;
+
+        for (int index = 0; index < answerPlatformRoots.Length; index++)
+        {
+            Transform platformRoot = answerPlatformRoots[index];
+            if (platformRoot != null && (hitTransform == platformRoot || hitTransform.IsChildOf(platformRoot)))
+                return index;
+        }
+
+        return -1;
+    }
+
+    public bool SetQuestion(Question question)
+    {
+        hasValidQuestion = false;
+        if (question == null)
+            return false;
+
+        string[] answers = question.GetAnswers();
+        if (answers == null || answers.Length < answerLabels.Length)
+            return false;
+
+        for (int index = 0; index < answerLabels.Length; index++)
+        {
+            if (answerLabels[index] == null || string.IsNullOrWhiteSpace(answers[index]))
+                return false;
+        }
+
+        correctAnswer = question.GetCorrectAnswer(answers);
+        if (string.IsNullOrWhiteSpace(correctAnswer))
+            return false;
+
+        for (int index = 0; index < answerLabels.Length; index++)
+            answerLabels[index].text = answers[index];
+
+        hasValidQuestion = true;
+        return true;
+    }
+
+    public bool SpawnAnt(GameObject antPrefab)
+    {
+        if (antPrefab == null || Ant == null)
+        {
+            Debug.LogError("SceneScript requires an ant prefab and a placeholder ant under the spawn point.");
+            return false;
+        }
+
+        Transform previousAnt = Ant.transform;
+        Transform parent = previousAnt.parent;
+        Vector3 localPosition = previousAnt.localPosition;
+        Quaternion localRotation = previousAnt.localRotation;
+        Vector3 localScale = previousAnt.localScale;
+
+        GameObject previousAntObject = Ant;
+        Ant = Instantiate(antPrefab, parent, false);
+        Ant.transform.localPosition = localPosition;
+        Ant.transform.localRotation = localRotation;
+        Ant.transform.localScale = localScale;
+        Destroy(previousAntObject);
+
+        antAnimator = Ant.GetComponentInChildren<Animator>(true);
+        if (antAnimator == null)
+        {
+            Debug.LogError("The selected ant prefab does not contain an Animator.");
+            return false;
+        }
+
+        return true;
+    }
+
+    public void BeginGame()
+    {
+        QuestionState = true;
+    }
+
+    private void SelectAnswer(int answerIndex)
+    {
+        if (answerRenderers[answerIndex] == null || answerJumpPoints[answerIndex] == null || spawnPoint == null)
+            return;
+
+        QuestionState = false;
+        SetAnimation("JumpingLoop", 0.1f);
+        answerRenderers[answerIndex].sharedMaterial = selectedMat;
+
+        bool isCorrect = string.Equals(
+            correctAnswer.Trim(),
+            answerLabels[answerIndex].text.Trim(),
+            StringComparison.OrdinalIgnoreCase);
+
+        if (activeTween != null && activeTween.IsActive())
+            activeTween.Kill();
+
+        float jumpHeight = Mathf.Max(0.1f, transform.lossyScale.x * 6f);
+        activeTween = Ant.transform
+            .DOJump(answerJumpPoints[answerIndex].position, jumpHeight, 1, AnswerJumpDuration)
+            .OnComplete(delegate
+            {
+                if (this == null || !isActiveAndEnabled)
+                    return;
+
+                SetAnimation("Happy Idle", 0.1f);
+                answerRenderers[answerIndex].sharedMaterial = isCorrect ? greenMat : redMat;
+
+                if (GameManager.instance != null)
+                    GameManager.instance.RecordAnswer(isCorrect);
+
+                StartCoroutine(ReturnAntToSpawn(answerIndex));
+            });
+    }
+
+    private IEnumerator ReturnAntToSpawn(int answerIndex)
+    {
+        yield return new WaitForSeconds(0.6f);
+        if (Ant == null || spawnPoint == null)
+            yield break;
+
+        SetAnimation("JumpingLoop", 0.1f);
+        float jumpHeight = Mathf.Max(0.1f, transform.lossyScale.x * 6f);
+        activeTween = Ant.transform
+            .DOJump(spawnPoint.transform.position, jumpHeight, 1, AnswerJumpDuration)
+            .OnComplete(delegate
+            {
+                if (this == null || !isActiveAndEnabled)
+                    return;
+
+                SetAnimation("Happy Idle", 0.1f);
+                if (answerRenderers[answerIndex] != null)
+                    answerRenderers[answerIndex].sharedMaterial = normalMat;
+
+                QuestionState = true;
+                if (GameManager.instance != null)
+                    GameManager.instance.LoadNextQuestion();
+            });
+    }
+
+    private void SetAnimation(string stateName, float transitionDuration)
+    {
+        if (antAnimator != null)
+            antAnimator.CrossFade(Animator.StringToHash(stateName), transitionDuration);
+    }
+
+    private void OnDestroy()
+    {
+        if (activeTween != null && activeTween.IsActive())
+            activeTween.Kill();
     }
 }

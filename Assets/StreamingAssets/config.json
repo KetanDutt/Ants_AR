@@ -1,0 +1,32 @@
+{
+  "voice": {
+    "language": "en-US",
+    "gender": "FEMALE",
+    "voice": "en-US-Wavenet-C"
+  },
+  "HelpText": "Welcome! Help the ant choose the right answer.",
+  "WelcomeText": "Let's play a quick quiz!",
+  "QuestionText": "Choose the best answer: {Question}",
+  "WhenAntSelectedText": "The ant is on its way!",
+  "CorrectText": "Great job! That's correct.",
+  "IncorrectText": "Not quite. Let's try the next one.",
+  "GameTexts": [],
+  "Ants": [],
+  "Questions": [
+    {
+      "question": "Which shape has three sides?",
+      "answers": ["Triangle", "Circle", "Square"],
+      "correctAnswer": "Triangle"
+    },
+    {
+      "question": "Which insect makes honey?",
+      "answers": ["Bee", "Ant", "Butterfly"],
+      "correctAnswer": "Bee"
+    },
+    {
+      "question": "Which planet is known as the Red Planet?",
+      "answers": ["Venus", "Mars", "Jupiter"],
+      "correctAnswer": "Mars"
+    }
+  ]
+}

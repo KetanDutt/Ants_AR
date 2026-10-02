@@ -13,6 +13,6 @@ MonoBehaviour:
   m_Name: GeneralConfig
   m_EditorClassIdentifier: 
   showWelcomeDialogAtStartup: 0
-  betaAPI: 1
+  betaAPI: 0
   packageName: 
   keySignature: 

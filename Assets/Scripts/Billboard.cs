@@ -1,23 +1,25 @@
 using UnityEngine;
 
+/// <summary>Keeps floating labels aligned with the current AR camera.</summary>
 public class Billboard : MonoBehaviour
 {
-    // Start is called before the first frame update
-    void Start()
-    {
+    private Camera arCamera;
 
+    private void Start()
+    {
+        if (GameManager.instance != null)
+            arCamera = GameManager.instance.arCamera;
+
+        if (arCamera == null)
+            arCamera = Camera.main;
     }
 
-    // Update is called once per frame
     private void LateUpdate()
     {
-        transform.LookAt(transform.position + GameManager.instance.arCamera.transform.forward);
-        // Vector3 position = transform.position;
-        // Vector3 cameraPosition = GameManager.instance.arCamera.transform.position;
-        // Vector3 direction = cameraPosition - position;
-        // Vector3 targetRotationEuler = Quaternion.LookRotation(-direction).eulerAngles;
-        // Vector3 scaledEuler = Vector3.Scale(targetRotationEuler, transform.up.normalized);
-        // Quaternion targetRotation = Quaternion.Euler(scaledEuler);
-        // transform.rotation = targetRotation;
+        if (arCamera == null)
+            arCamera = Camera.main;
+
+        if (arCamera != null)
+            transform.LookAt(transform.position + arCamera.transform.forward, arCamera.transform.up);
     }
 }

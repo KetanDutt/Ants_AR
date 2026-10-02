@@ -42,8 +42,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 263dd57c3ef8b4cb71b3572035f7ed12, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   isDontDestroyOnLoad: 0
-  isFullDebugLogIfError: 1
-  apiKey: sgsgsf
+  isFullDebugLogIfError: 0
+  apiKey:
